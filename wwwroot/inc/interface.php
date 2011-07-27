@@ -112,18 +112,20 @@ function renderInterfaceHTML ($pageno, $tabno, $payload)
 }
 
 // Main menu.
-function renderIndexItem ($ypageno) {
-  global $page;
-  if (permitted($ypageno)) {
-	  $title = getPageName ($ypageno);
-	print "          <td>\n";          
-    print "            <h1><a href='".makeHref(array('page'=>$ypageno))."'>".$title."<br>\n";
-    printImageHREF ($ypageno);
-    print "</a></h1>\n";
-    print "          </td>\n";
-  } else {
-    print "          <td>&nbsp;</td>\n";
-  }
+function renderIndexItem ($ypageno)
+{
+	global $page;
+	if (permitted(array ('+view' => array ('$page_' . $ypageno))))
+	{
+		$title = getPageName ($ypageno);
+		print "<td>\n";          
+		print "<h1><a href='".makeHref(array('page'=>$ypageno))."'>".$title."<br>\n";
+		printImageHREF ($ypageno);
+		print "</a></h1>\n";
+		print "</td>\n";
+	}
+	else
+		print "<td>&nbsp;</td>\n";
 }
 
 function renderIndex ()
@@ -945,7 +947,7 @@ function renderObject ($object_id)
 		if
 		(
 			strlen ($record['value']) and 
-			permitted (NULL, NULL, NULL, array (array ('tag' => '$attr_' . $record['id'])))
+			permitted (array ('+target' => '$attr_' . $record['id']))
 		)
 			echo "<tr><th width='50%' class=sticker>${record['name']}:</th><td class=sticker>" .
 				formatAttributeValue ($record) . "</td></tr>";
@@ -1029,7 +1031,7 @@ function renderObject ($object_id)
 				echo implode ('', formatPortReservation ($port)) . '<td></td>';
 			echo "</tr>";
 		}
-		if (permitted (NULL, 'ports', 'set_reserve_comment'))
+		if (permitted (array ('view' => array ('$page_object', '$tab_ports, $op_set_reserve_comment'))))
 			addJS ('js/inplace-edit.js');
 		echo "</table><br>";
 		finishPortlet();
@@ -1610,7 +1612,7 @@ function renderPortsInfo($object_id)
 	global $nextorder;
 	echo "<table width='100%'><tr>";
 	
-	if (permitted (NULL, NULL, 'get_link_status'))
+	if (permitted (array ('+view' => '$op_get_link_status')))
 	{
 		try
 		{
@@ -2783,7 +2785,7 @@ function renderIPv4Network ($id)
 		echo "</td></tr>\n";
 	endfor;
 	// end of iteration
-	if (permitted (NULL, NULL, 'set_reserve_comment'))
+	if (permitted (array ('+view' => '$op_set_reserve_comment')))
 		addJS ('js/inplace-edit.js');
 
 	echo "</table>";
@@ -3016,7 +3018,7 @@ function renderIPv6NetworkAddresses ($netinfo)
 		echo "</td></tr>";
 	}
 	echo "</table>";
-	if (permitted (NULL, NULL, 'set_reserve_comment'))
+	if (permitted (array ('+view' => '$op_set_reserve_comment')))
 		addJS ('js/inplace-edit.js');
 }
 
@@ -4044,7 +4046,7 @@ function renderConfigMainpage ()
 	global $pageno, $page;
 	echo '<ul>';
 	foreach ($page as $cpageno => $cpage)
-		if (isset ($cpage['parent']) and $cpage['parent'] == $pageno  && permitted($cpageno))
+		if (isset ($cpage['parent']) and $cpage['parent'] == $pageno  && permitted (array ('view' => '$page_' . $cpageno)))
 			echo "<li><a href='index.php?page=${cpageno}'>" . $cpage['title'] . "</li>\n";
 	echo '</ul>';
 }
@@ -4729,8 +4731,8 @@ function renderVLANMembership ($object_id)
 		foreach (array_keys ($vlanlist) as $to)
 			if
 			(
-				permitted (NULL, NULL, 'setPortVLAN', array (array ('tag' => '$fromvlan_' . $port['vlanid']), array ('tag' => '$vlan_' . $port['vlanid']))) and
-				permitted (NULL, NULL, 'setPortVLAN', array (array ('tag' => '$tovlan_' . $to), array ('tag' => '$vlan_' . $to)))
+				permitted (array ('+view' => array ('$fromvlan_' . $port['vlanid'], '$vlan_' . $port['vlanid'], '$op_setPortVLAN'))) and
+				permitted (array ('+view' => array ('$tovlan_' . $to, '$vlan_' . $to, '$op_setPortVLAN')))
 			)
 				$vlanpermissions[$port['vlanid']][] = $to;
 	}
@@ -5901,12 +5903,13 @@ function renderEntityTagsPortlet ($title, $tags, $preselect, $realm)
 
 function renderEntityTags ($entity_id)
 {
-	global $tagtree, $taglist, $target_given_tags, $pageno, $etype_by_pageno;
+	global $tagtree, $taglist, $pageno, $etype_by_pageno;
+	$cell = spotEntity ($etype_by_pageno[$pageno], $entity_id);
 	echo '<table border=0 width="100%"><tr>';
 
 	if (count ($taglist) > getConfigVar ('TAGS_QUICKLIST_THRESHOLD'))
 	{
-		$minilist = getTagChart (getConfigVar ('TAGS_QUICKLIST_SIZE'), $etype_by_pageno[$pageno], $target_given_tags);
+		$minilist = getTagChart (getConfigVar ('TAGS_QUICKLIST_SIZE'), $cell['realm'], $cell['etags']);
 		// It could happen, that none of existing tags have been used in the current realm.
 		if (count ($minilist))
 		{
@@ -5926,7 +5929,7 @@ function renderEntityTags ($entity_id)
 
 	// do not do anything about empty tree, trigger function ought to work this out
 	echo '<td class=pcright>';
-	renderEntityTagsPortlet ('Tag tree', $tagtree, $target_given_tags, $etype_by_pageno[$pageno]);
+	renderEntityTagsPortlet ('Tag tree', $tagtree, $cell['etags'], $cell['realm']);
 	echo '</td>';
 
 	echo '</tr></table>';
@@ -6293,13 +6296,22 @@ function renderMyPreferences ()
 
 function renderMyAccount ()
 {
-	global $remote_username, $remote_displayname, $user_given_tags;
+	global $remote_username, $remote_displayname, $context;
+	$etags = getExplicitTagsOnly ($context['user']);
+	$itags = getImplicitTags ($etags);
+	$atags = getAutomaticTags ($context['user']);
+
 	startPortlet ('Current user info');
 	echo '<div style="text-align: left; display: inline-block;">';
 	echo "<table>";
 	echo "<tr><th>Login:</th><td>${remote_username}</td></tr>\n";
 	echo "<tr><th>Name:</th><td>${remote_displayname}</td></tr>\n";
-	echo "<tr><th>Tags:</th><td>" . serializeTags ($user_given_tags) . "</td></tr>\n";
+	if (count ($etags))
+		echo "<tr><th>Explicit tags:</th><td>" . serializeTags ($etags) . "</td></tr>\n";
+	if (count ($itags))
+		echo "<tr><th>Implicit tags:</th><td>" . serializeTags ($itags) . "</td></tr>\n";
+	if (getConfigVar ('SHOW_AUTOMATIC_TAGS') == 'yes' and count ($atags))
+		echo "<tr><th>Automatic tags:</th><td>" . serializeTags ($atags) . "</td></tr>\n";
 	echo '</table></div>';
 }
 
@@ -6336,7 +6348,7 @@ function renderFile ($file_id)
 	echo "<tr><th width='50%' class=tdright>Type:</th>";
 	printf("<td class=tdleft>%s</td></tr>", htmlspecialchars ($file['type']));
 	echo "<tr><th width='50%' class=tdright>Size:</th><td class=tdleft>";
-	if (isolatedPermission ('file', 'download', $file))
+	if (permitted (array ('view' => array ('$page_file', '$tab_download'))))
 	{
 		echo "<a href='?module=download&file_id=${file_id}'>";
 		printImageHREF ('download', 'Download file');
@@ -6389,7 +6401,11 @@ function renderFile ($file_id)
 		finishPortlet();
 	}
 
-	if (isolatedPermission ('file', 'download', $file) and '' != ($pcode = getFilePreviewCode ($file)))
+	if
+	(
+		permitted (array ('view' => array ('$page_file', '$tab_download'))) and
+		'' != ($pcode = getFilePreviewCode ($file))
+	)
 	{
 		echo "</td><td class=pcright>";
 		startPortlet ('preview');
@@ -6520,7 +6536,11 @@ function renderFilesPortlet ($entity_type = NULL, $entity_id = 0)
 			$file = spotEntity ('file', $file['id']);
 			renderCell ($file);
 			echo "</td><td class=tdleft>${file['comment']}</td></tr>";
-			if (isolatedPermission ('file', 'download', $file) and '' != ($pcode = getFilePreviewCode ($file)))
+			if
+			(
+				permitted (array ( 'view' => array ('$page_file', '$tab_download'), 'target' => $file)) and
+				'' != ($pcode = getFilePreviewCode ($file))
+			)
 				echo "<tr><td colspan=2>${pcode}</td></tr>\n";
 		}
 		echo "</table><br>\n";
@@ -6724,7 +6744,7 @@ function renderCell ($cell)
 		echo "</td></tr><tr><td>";
 		echo count ($cell['etags']) ? ("<small>" . serializeTags ($cell['etags']) . "</small>") : '&nbsp;';
 		echo '</td></tr><tr><td>';
-		if (isolatedPermission ('file', 'download', $cell))
+		if (permitted (array ('view' => array ('$page_file', '$tab_download'), 'target' => $cell)))
 		{
 			// FIXME: reuse renderFileDownloader()
 			echo "<a href='?module=download&file_id=${cell['id']}'>";
@@ -7010,14 +7030,14 @@ function getTitle ($pageno)
 
 function showTabs ($pageno, $tabno)
 {
-	global $tab, $page, $trigger;
+	global $tab, $pageno, $page, $trigger;
 	if (!isset ($tab[$pageno]['default']))
 		return;
 	echo "<div class=greynavbar><ul id=foldertab style='margin-bottom: 0px; padding-top: 10px;'>";
 	foreach ($tab[$pageno] as $tabidx => $tabtitle)
 	{
 		// Hide forbidden tabs.
-		if (!permitted ($pageno, $tabidx))
+		if (!permitted (array ('view' => array ('$page_' . $pageno, '$tab_' . $tabidx))))
 			continue;
 		// Dynamic tabs should only be shown in certain cases (trigger exists and returns true).
 		if (!isset ($trigger[$pageno][$tabidx]))
@@ -7399,14 +7419,8 @@ function render8021QOrderForm ($some_id)
 			$options = array();
 			foreach (getNarrowObjectList ('VLANSWITCH_LISTSRC') as $object_id => $object_dname)
 				if (!in_array ($object_id, $all_vswitches))
-				{
-					$ctx = getContext();
-					spreadContext (spotEntity ('object', $object_id));
-					$decision = permitted (NULL, NULL, 'del');
-					restoreContext ($ctx);
-					if ($decision)
+					if (permitted (array ('+target' => spotEntity ('object', $object_id), '+view' => '$op_del')))
 						$options[$object_id] = $object_dname;
-				}
 			printSelect ($options, array ('name' => 'object_id', 'tabindex' => 101, 'size' => getConfigVar ('MAXSELSIZE')), $focus['prev_objid']);
 			echo '</td>';
 		}
@@ -7416,14 +7430,8 @@ function render8021QOrderForm ($some_id)
 		{
 			$options = array();
 			foreach (listCells ('vst') as $nominee)
-			{
-				$ctx = getContext();
-				spreadContext ($nominee);
-				$decision = permitted (NULL, NULL, 'add');
-				restoreContext ($ctx);
-				if ($decision)
+				if (permitted (array ('+target' => $nominee, '+view' => '$op_add')))
 					$options[$nominee['id']] = niftyString ($nominee['description'], 30, FALSE);
-			}
 			echo '<td>' . getSelect ($options, array ('name' => 'vst_id', 'tabindex' => 103, 'size' => getConfigVar ('MAXSELSIZE')), $focus['prev_vstid']) . '</td>';
 		}
 		echo '<td>' . getImageHREF ('Attach', 'set', TRUE, 104) . '</td></tr></form>';
@@ -7483,12 +7491,12 @@ function render8021QOrderForm ($some_id)
 	$vstlist = getVSTOptions();
 	foreach ($minuslines as $item_object_id => $item)
 	{
-		$ctx = getContext();
+		$addittional_cell = array();
 		if ($pageno != 'object')
-			spreadContext (spotEntity ('object', $item_object_id));
+			$addittional_cell = spotEntity ('object', $item_object_id);
 		if ($pageno != 'vst')
-			spreadContext (spotEntity ('vst', $item['vst_id']));
-		if (! permitted (NULL, NULL, 'del'))
+			$addittional_cell = spotEntity ('vst', $item['vst_id']);
+		if (! permitted (array ('+target' => $addittional_cell, '+view' => '$op_del')))
 			$cutblock = getImageHREF ('Cut gray', 'permission denied');
 		else
 		{
@@ -7504,7 +7512,6 @@ function render8021QOrderForm ($some_id)
 			$cutblock = '<a href="' . makeHrefProcess ($args) . '">';
 			$cutblock .= getImageHREF ('Cut', 'unbind') . '</a>';
 		}
-		restoreContext ($ctx);
 		echo '<tr>';
 		if ($pageno != 'object')
 		{
@@ -7905,7 +7912,7 @@ function renderObject8021QPorts ($object_id)
 		echo '<li>' . getImageHREF ('SAVE', 'save configuration', TRUE, 100) . '</li>';
 	}
 	echo '</form>';
-	if (permitted (NULL, NULL, NULL, array (array ('tag' => '$op_recalc8021Q'))))
+	if (permitted (array ('+view' => '$op_exec8021QRecalc')))
 		echo '<li><a href="' . makeHrefProcess (array ('op' => 'exec8021QRecalc', 'object_id' => $object_id)) . '">' .
 			getImageHREF ('RECALC', 'Recalculate uplinks and downlinks') . '</a></li>';
 	echo '</ul></td></tr></table>';
@@ -7969,8 +7976,8 @@ function getAccessPortControlCode ($req_port_name, $vdom, $port_name, $port, &$n
 		foreach (array_keys ($vdom['vlanlist']) as $to)
 			if
 			(
-				permitted (NULL, NULL, 'save8021QConfig', array (array ('tag' => '$fromvlan_' . $port['native']), array ('tag' => '$vlan_' . $port['native']))) and
-				permitted (NULL, NULL, 'save8021QConfig', array (array ('tag' => '$tovlan_' . $to), array ('tag' => '$vlan_' . $to)))
+				permitted (array ('+view' => array ('$fromvlan_' . $port['native'], '$vlan_' . $port['native'], '$op_save8021QConfig'))) and
+				permitted (array ('+view' => array ('$tovlan_' . $to, '$vlan_' . $to, '$op_save8021QConfig')))
 			)
 				$vlanpermissions[$port['native']][] = $to;
 	}
@@ -8044,18 +8051,22 @@ function renderTrunkPortControls ($vswitch, $vdom, $port_name, $vlanport)
 	// Present all VLANs of the domain and all currently configured VLANs
 	// (regardless if these sets intersect or not).
 	$allowed_options = array();
-	foreach ($vdom['vlanlist'] as $vlan_id => $vlan_info)
+	foreach ($vlanport['allowed'] as $vlan_id)
 		$allowed_options[$vlan_id] = array
 		(
-			'vlan_type' => $vlan_info['vlan_type'],
-			'text' => formatVLANName ($vlan_info, 'label'),
+			'vlan_type' => 'none',
+			'text' => "unlisted VLAN ${vlan_id}",
 		);
-	foreach ($vlanport['allowed'] as $vlan_id)
-		if (!array_key_exists ($vlan_id, $allowed_options))
+	foreach ($vdom['vlanlist'] as $vlan_id => $vlan_info)
+		if
+		(
+			array_key_exists ($vlan_id, $allowed_options) or
+			permitted (array ('+view' => array ('$tovlan_' . $vlan_id, '$vlan_' . $vlan_id, '$op_setPortVLAN')))
+		)
 			$allowed_options[$vlan_id] = array
 			(
-				'vlan_type' => 'none',
-				'text' => "unlisted VLAN ${vlan_id}",
+				'vlan_type' => $vlan_info['vlan_type'],
+				'text' => formatVLANName ($vlan_info, 'label'),
 			);
 	ksort ($allowed_options);
 	foreach ($allowed_options as $vlan_id => $option)
@@ -9392,16 +9403,16 @@ function switchportInfoJS($object_id)
 {
 	$availible_ops = array
 	(
-		'link' => array ('op' => 'get_link_status', 'gw' => 'getportstatus'),
-		'conf' => array ('op' => 'get_port_conf', 'gw' => 'get8021q'),
-		'mac' =>  array ('op' => 'get_mac_list', 'gw' => 'getmaclist'),
+		'link' => array ('op' => '$op_get_link_status', 'gw' => 'getportstatus'),
+		'conf' => array ('op' => '$op_get_port_conf', 'gw' => 'get8021q'),
+		'mac' =>  array ('op' => '$op_get_mac_list', 'gw' => 'getmaclist'),
 	);
 	$breed = detectDeviceBreed ($object_id);
 	$allowed_ops = array();
 	foreach ($availible_ops as $prefix => $data)
 		if
 		(
-			permitted ('object', 'liveports', $data['op']) and
+			permitted (array ('view' => array ('$page_object', '$tab_liveports', $data['op']))) and
 			validBreedFunction ($breed, $data['gw'])
 		)
 			$allowed_ops[] = $prefix;

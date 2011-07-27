@@ -3687,7 +3687,7 @@ function produceTagsForLastRecord ($realm, $tagidlist, $last_insert_id = 0)
 		addTagForEntity ($realm, $last_insert_id, $taginfo['id']);
 }
 
-function createIPv4Prefix ($range = '', $name = '', $is_bcast = FALSE, $taglist = array(), $vlan_ck = NULL)
+function createIPv4Prefix ($range = '', $name = '', $is_bcast = FALSE, $taglist = array())
 {
 	// $range is in x.x.x.x/x format, split into ip/mask vars
 	$rangeArray = explode('/', $range);
@@ -3746,17 +3746,10 @@ function createIPv4Prefix ($range = '', $name = '', $is_bcast = FALSE, $taglist 
 		updateV4Address ($broadcast_addr, 'broadcast', 'yes');
 	}
 	produceTagsForLastRecord ('ipv4net', $taglist);
-	if ($vlan_ck != NULL)
-	{
-		$ctx = getContext();
-		fixContext (spotEntity ('ipv4net', $network_id));
-		if (permitted ('ipv4net', '8021q', 'bind'))
-			commitSupplementVLANIPv4 ($vlan_ck, $network_id);
-		restoreContext ($ctx);
-	}
+	return $network_id;
 }
 
-function createIPv6Prefix ($range = '', $name = '', $is_connected = FALSE, $taglist = array(), $vlan_ck = NULL)
+function createIPv6Prefix ($range = '', $name = '', $is_connected = FALSE, $taglist = array())
 {
 	// $range is in aaa0:b::c:d/x format, split into ip/mask vars
 	$rangeArray = explode ('/', $range);
@@ -3787,14 +3780,7 @@ function createIPv6Prefix ($range = '', $name = '', $is_connected = FALSE, $tagl
 	if ($is_connected)
 		updateV6Address ($network_addr, 'Subnet-Router anycast', 'yes');
 	produceTagsForLastRecord ('ipv6net', $taglist);
-	if ($vlan_ck != NULL)
-	{
-		$ctx = getContext();
-		fixContext (spotEntity ('ipv6net', $network_id));
-		if (permitted ('ipv6net', '8021q', 'bind'))
-			commitSupplementVLANIPv6 ($vlan_ck, $network_id);
-		restoreContext ($ctx);
-	}
+	return $network_id;
 }
 
 // FIXME: This function doesn't wipe relevant records from IPv4Address table.

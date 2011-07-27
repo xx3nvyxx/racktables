@@ -817,8 +817,15 @@ function addIPv4Prefix ()
 	$is_bcast = isset ($_REQUEST['is_bcast']) ? $_REQUEST['is_bcast'] : 'off';
 	$taglist = isset ($_REQUEST['taglist']) ? $_REQUEST['taglist'] : array();
 	global $sic;
-	$vlan_ck = empty ($sic['vlan_ck']) ? NULL : $sic['vlan_ck'];
-	createIPv4Prefix ($_REQUEST['range'], $sic['name'], $is_bcast == 'on', $taglist, $vlan_ck);
+	$network_id = createIPv4Prefix ($_REQUEST['range'], $sic['name'], $is_bcast == 'on', $taglist);
+	if (! empty ($sic['vlan_ck']))
+	{
+		$net = spotEntity ('ipv4net', $network_id);
+		if (permitted (array ('target' => $net, 'view' => array ('$page_ipv4net', '$tab_8021q', '$op_bind'))))
+			commitSupplementVLANIPv4 ($sic['vlan_ck'], $network_id);
+		else
+			showWarning ("Permission denied for binding VLAN to IP network");
+	}
 	return showFuncMessage (__FUNCTION__, 'OK');
 }
 
@@ -831,8 +838,16 @@ function addIPv6Prefix ()
 	$taglist = isset ($_REQUEST['taglist']) ? $_REQUEST['taglist'] : array();
 	$is_connected = isset ($_REQUEST['is_connected']) ? ($_REQUEST['is_connected'] == 'on') : FALSE;
 	global $sic;
-	$vlan_ck = empty ($sic['vlan_ck']) ? NULL : $sic['vlan_ck'];
-	createIPv6Prefix ($_REQUEST['range'], $sic['name'], $is_connected, $taglist, $vlan_ck);
+	$network_id = createIPv6Prefix ($_REQUEST['range'], $sic['name'], $is_connected, $taglist);
+	if (! empty ($sic['vlan_ck']))
+	{
+		$net = spotEntity ('ipv6net', $network_id);
+		if (permitted (array ('target' => $net, 'view' => array ('$page_ipv6net', '$tab_8021q', '$op_bind'))))
+			commitSupplementVLANIPv6 ($sic['vlan_ck'], $network_id);
+		else
+			showWarning ("Permission denied for binding VLAN to IP network");
+	}
+
 	return showFuncMessage (__FUNCTION__, 'OK');
 }
 
@@ -989,7 +1004,7 @@ function clearSticker ()
 {
 	global $sic;
 	assertUIntArg ('attr_id');
-	if (permitted (NULL, NULL, NULL, array (array ('tag' => '$attr_' . $sic['attr_id']))))
+	if (permitted (array ('+target' => '$attr_' . $sic['attr_id'])))
 		commitUpdateAttrValue (getBypassValue(), $sic['attr_id']);
 	else
 	{
@@ -1119,7 +1134,7 @@ function updateObject ()
 		# type is a dictionary and it is the "--NOT SET--" value of 0.
 		if ($value == '' || ($oldvalues[$attr_id]['type'] == 'dict' && $value == 0))
 		{
-			if (permitted (NULL, NULL, NULL, array (array ('tag' => '$attr_' . $attr_id))))
+			if (permitted (array ('+target' => '$attr_' . $attr_id)))
 				commitUpdateAttrValue ($object_id, $attr_id);
 			else
 				showError ('Permission denied, "' . $oldvalues[$attr_id]['name'] . '" left unchanged');
@@ -1143,7 +1158,7 @@ function updateObject ()
 		}
 		if ($value === $oldvalue) // ('' == 0), but ('' !== 0)
 			continue;
-		if (permitted (NULL, NULL, NULL, array (array ('tag' => '$attr_' . $attr_id))))
+		if (permitted (array ('+target' => '$attr_' . $attr_id)))
 			commitUpdateAttrValue ($object_id, $attr_id, $value);
 		else
 			showError ('Permission denied, "' . $oldvalues[$attr_id]['name'] . '" left unchanged');
@@ -1781,8 +1796,8 @@ function setPortVLAN ()
 		$newvlanid = $_REQUEST['vlanid_' . $i];
 		if
 		(
-			!permitted (NULL, NULL, NULL, array (array ('tag' => '$fromvlan_' . $oldvlanid), array ('tag' => '$vlan_' . $oldvlanid))) or
-			!permitted (NULL, NULL, NULL, array (array ('tag' => '$tovlan_' . $newvlanid), array ('tag' => '$vlan_' . $newvlanid)))
+			! permitted (array ('+view' => array ('$fromvlan_' . $oldvlanid, '$vlan_' . $oldvlanid))) or
+			! permitted (array ('+view' => array ('$fromvlan_' . $newvlanid, '$vlan_' . $newvlanid)))
 		)
 		{
 			showOneLiner (159, array ($portname, $oldvlanid, $newvlanid));
@@ -2209,13 +2224,10 @@ function add8021QOrder ()
 	assertUIntArg ('vdom_id');
 	assertUIntArg ('object_id');
 	assertUIntArg ('vst_id');
-	global $sic, $pageno;
-	fixContext();
-	if ($pageno != 'object')
-		spreadContext (spotEntity ('object', $sic['object_id']));
-	if ($pageno != 'vst')
-		spreadContext (spotEntity ('vst', $sic['vst_id']));
-	assertPermission();
+	global $sic;
+	$obj =  spotEntity ('object', $sic['object_id']);
+	$vst = spotEntity ('vst', $sic['vst_id']);
+	assertPermission (array ('target' => $obj, '+target' => $vst));
 	usePreparedExecuteBlade
 	(
 		'INSERT INTO VLANSwitch (domain_id, object_id, template_id, last_change, out_of_sync) ' .
@@ -2231,13 +2243,10 @@ function del8021QOrder ()
 	assertUIntArg ('object_id');
 	assertUIntArg ('vdom_id');
 	assertUIntArg ('vst_id');
-	global $sic, $pageno;
-	fixContext();
-	if ($pageno != 'object')
-		spreadContext (spotEntity ('object', $sic['object_id']));
-	if ($pageno != 'vst')
-		spreadContext (spotEntity ('vst', $sic['vst_id']));
-	assertPermission();
+	global $sic;
+	$obj =  spotEntity ('object', $sic['object_id']);
+	$vst = spotEntity ('vst', $sic['vst_id']);
+	assertPermission (array ('target' => $obj, '+target' => $vst));
 	usePreparedDeleteBlade ('VLANSwitch', array ('object_id' => $sic['object_id']));
 	$focus_hints = array
 	(
@@ -2456,7 +2465,6 @@ function process8021QSyncRequest ()
 $msgcode['process8021QRecalcRequest']['CHANGED'] = 87;
 function process8021QRecalcRequest ()
 {
-	assertPermission (NULL, NULL, NULL, array (array ('tag' => '$op_recalc8021Q')));
 	$counters = recalc8021QPorts (getBypassValue());
 	if ($counters['ports'])
 		return showFuncMessage (__FUNCTION__, 'CHANGED', array ($counters['ports'], $counters['switches']));

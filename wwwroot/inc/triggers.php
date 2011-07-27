@@ -83,14 +83,15 @@ function trigger_livevlans ()
 function trigger_liveports ()
 {
 	$breed = detectDeviceBreed (getBypassValue());
-	foreach (array ('getportstatus', 'getmaclist') as $command)
-		if
-		(
-			validBreedFunction ($breed, $command) and
-			permitted (NULL, 'liveports', $command)
-		)
-			return 'std';
-	return '';
+	if (
+		validBreedFunction ($breed, 'getportstatus') and
+		permitted (array ('view' => array ('$page_object', '$tab_liveports', '$op_get_link_status'))) or
+		validBreedFunction ($breed, 'getmaclist') and
+		permitted (array ('view' => array ('$page_object', '$tab_liveports', '$op_get_mac_list')))
+	)
+		return 'std';
+	else
+		return '';
 }
 
 // SNMP port finder tab trigger. At the moment we decide on showing it

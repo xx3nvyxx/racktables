@@ -428,7 +428,6 @@ function renderPopupIPv4Selector()
 
 function renderPopupHTML()
 {
-	global $pageno, $tabno;
 header ('Content-Type: text/html; charset=UTF-8');
 ?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en" style="height: 100%;">
@@ -438,17 +437,11 @@ header ('Content-Type: text/html; charset=UTF-8');
 	switch ($_REQUEST['helper'])
 	{
 		case 'objlist':
-			$pageno = 'object';
-			$tabno = 'default';
-			fixContext();
-			assertPermission();
+			assertPermission (array ('view' => array ('$page_object', '$tab_default')));
 			$text .= getOutputOf ('renderPopupObjectSelector');
 			break;
 		case 'portlist':
-			$pageno = 'depot';
-			$tabno = 'default';
-			fixContext();
-			assertPermission();
+			assertPermission (array ('view' => array ('$page_depot', '$tab_default')));
 			$text .= '<div style="background-color: #f0f0f0; border: 1px solid #3c78b5; padding: 10px; height: 100%; text-align: center; margin: 5px;">';
 			if (isset ($_REQUEST['do_link']))
 				$text .= getOutputOf ('handlePopupPortLink');
@@ -457,10 +450,7 @@ header ('Content-Type: text/html; charset=UTF-8');
 			$text .= '</div>';
 			break;
 		case 'inet4list':
-			$pageno = 'ipv4space';
-			$tabno = 'default';
-			fixContext();
-			assertPermission();
+			assertPermission (array ('view' => array ('$page_ipv4space', '$tab_default')));
 			$text .= getOutputOf ('renderPopupIPv4Selector');
 			break;
 		default:

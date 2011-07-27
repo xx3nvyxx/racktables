@@ -125,11 +125,7 @@ function dispatchAJAXRequest()
 	switch ($_REQUEST['ac'])
 	{
 	case 'verifyCode':
-		global $pageno, $tabno;
-		$pageno = 'perms';
-		$tabno = 'edit';
-		fixContext();
-		assertPermission();
+		assertPermission (array ('view' => array ('$page_perms', '$tab_edit')));
 		genericAssertion ('code', 'string');
 		$result = getRackCode (dos2unix ($_REQUEST['code']));
 		if ($result['result'] == 'ACK')
@@ -149,13 +145,13 @@ function dispatchAJAXRequest()
 		);
 		$opmap = array
 		(
-			'get-port-link' => 'get_link_status',
-			'get-port-mac'  => 'get_mac_list',
-			'get-port-conf' => 'get_port_conf',
+			'get-port-link' => '$op_get_link_status',
+			'get-port-mac'  => '$op_get_mac_list',
+			'get-port-conf' => '$op_get_port_conf',
 		);
 		genericAssertion ('object_id', 'uint');
-		fixContext (spotEntity ('object', $_REQUEST['object_id']));
-		assertPermission ('object', 'liveports', $opmap[$_REQUEST['ac']]);
+		$object = spotEntity ('object', $_REQUEST['object_id']);
+		assertPermission (array ('target' => $object, 'view' => array ('$page_object', '$tab_liveports', $opmap[$_REQUEST['ac']])));
 		echo json_encode ($funcmap[$_REQUEST['ac']] ($_REQUEST['object_id']));
 		break;
 	case 'upd-reservation-port':
@@ -163,8 +159,8 @@ function dispatchAJAXRequest()
 		assertUIntArg ('id');
 		assertStringArg ('comment', TRUE);
 		$port_info = getPortInfo ($sic['id']);
-		fixContext (spotEntity ('object', $port_info['object_id']));
-		assertPermission ('object', 'ports', 'set_reserve_comment');
+		$object = spotEntity ('object', $port_info['object_id']);
+		assertPermission (array ('target' => $object, 'view' => array ('$page_object', '$tab_ports', '$op_set_reserve_comment')));
 		if ($port_info['linked'])
 			throw new RackTablesError ('Cant update port comment: port is already linked');
 		if (! isset ($port_info['reservation_comment']))
@@ -195,9 +191,13 @@ function dispatchAJAXRequest()
 		$addr = getIPAddress ($ip);
 		if (! empty ($addr['allocs']) && empty ($addr['name']))
 			throw new RackTablesError ('Cant update IP comment: address is allocated');
+		$permissions = array
+		(
+			'view' => array ('$page_' . $net_realm, '$op_set_reserve_comment')
+		);
 		if (isset ($net_id))
-			fixContext (spotEntity ($net_realm, $net_id));
-		assertPermission ($net_realm, NULL, 'set_reserve_comment');
+			$permissions['target'] = spotEntity ($net_realm, $net_id);
+		assertPermission ($permissions);
 		updateAddress ($ip, $sic['comment'], $addr['reserved']);
 		echo json_encode ('OK');
 		break;

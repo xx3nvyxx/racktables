@@ -66,6 +66,9 @@ function lexError4 ($s, $ln = 'N/A')
  * LEX_INSERT
  * LEX_REMOVE
  * LEX_ON
+ * LEX_TARGET_CONTEXT
+ * LEX_USER_CONTEXT
+ * LEX_VIEW_CONTEXT
  *
  * FIXME: would these work better as normal (integer) constants?
  */
@@ -75,6 +78,7 @@ function getLexemsFromRawText ($text)
 	// Add a mock character to aid in synchronization with otherwise correct,
 	// but short or odd-terminated final lines.
 	$text .= ' ';
+	
 	$textlen = mb_strlen ($text);
 	$lineno = 1;
 	$state = 'ESOTSM';
@@ -166,6 +170,17 @@ function getLexemsFromRawText ($text)
 								break;
 							case 'on':
 								$ret[] = array ('type' => 'LEX_ON', 'lineno' => $lineno);
+								break;
+							case 'for':
+							case 'to':
+								$ret[] = array ('type' => 'LEX_USER_CONTEXT', 'lineno' => $lineno);
+								break;
+							case 'with':
+							case 'on':
+								$ret[] = array ('type' => 'LEX_TARGET_CONTEXT', 'lineno' => $lineno);
+								break;
+							case 'do':
+								$ret[] = array ('type' => 'LEX_VIEW_CONTEXT', 'lineno' => $lineno);
 								break;
 							default:
 								return lexError2 ($buffer, $lineno);
@@ -318,7 +333,8 @@ function getParseTreeFromLexems ($lexems)
 			if
 			(
 				$stacktop['type'] == 'SYNT_AND_EXPR' and $done < $todo and $lexems[$done]['type'] == 'LEX_AND' or
-				$stacktop['type'] == 'SYNT_EXPR' and $done < $todo and $lexems[$done]['type'] == 'LEX_OR'
+				$stacktop['type'] == 'SYNT_EXPR' and $done < $todo and $lexems[$done]['type'] == 'LEX_OR' or
+				$stacktop['type'] == 'SYNT_GRANT' and $done < $todo and ($lexems[$done]['type'] == 'LEX_USER_CONTEXT' or $lexems[$done]['type'] == 'LEX_TARGET_CONTEXT' or $lexems[$done]['type'] == 'LEX_VIEW_CONTEXT')
 			)
 			{
 				// shift!
@@ -637,7 +653,30 @@ function getParseTreeFromLexems ($lexems)
 				);
 				continue;
 			}
-			// GRANT ::= allow EXPRESSION | deny EXPRESSION
+			// CONTEXT_MATCH ::= (with|do|for) EXPRESSION
+			if
+			(
+				$stacktop['type'] == 'SYNT_EXPR' and
+				($stacksecondtop['type'] == 'LEX_TARGET_CONTEXT' or $stacksecondtop['type'] == 'LEX_USER_CONTEXT' or $stacksecondtop['type'] == 'LEX_VIEW_CONTEXT')
+			)
+			{
+				// reduce!
+				array_pop ($stack);
+				array_pop ($stack);
+				array_push
+				(
+					$stack,
+					array
+					(
+						'type' => 'SYNT_CONTEXT_MATCH',
+						'lineno' => $stacktop['lineno'],
+						'condition' => isset ($stacktop['load']) ? $stacktop['load'] : $stacktop,
+						'part' => $stacksecondtop['type'],
+					)
+				);
+				continue;
+			}
+			// GRANT ::= (allow|deny) EXPRESSION
 			if
 			(
 				$stacktop['type'] == 'SYNT_EXPR' and
@@ -655,11 +694,55 @@ function getParseTreeFromLexems ($lexems)
 						'type' => 'SYNT_GRANT',
 						'lineno' => $stacktop['lineno'],
 						'decision' => $stacksecondtop['type'],
-						'condition' => isset ($stacktop['load']) ? $stacktop['load'] : $stacktop
+						'condition' => isset ($stacktop['load']) ? $stacktop['load'] : $stacktop,
+						'parts' => array(),
 					)
 				);
 				continue;
 			}
+			// GRANT ::= (allow|deny) CONTEXT_MATCH
+			if
+			(
+				$stacktop['type'] == 'SYNT_CONTEXT_MATCH' and
+				($stacksecondtop['type'] == 'LEX_ALLOW' or $stacksecondtop['type'] == 'LEX_DENY')
+			)
+			{
+				// reduce!
+				array_pop ($stack);
+				array_pop ($stack);
+				array_push
+				(
+					$stack,
+					array
+					(
+						'type' => 'SYNT_GRANT',
+						'lineno' => $stacktop['lineno'],
+						'decision' => $stacksecondtop['type'],
+						'condition' => NULL,
+						'parts' => array ($stacktop['part'] => $stacktop['condition']),
+					)
+				);
+				continue;
+			}
+			// GRANT ::= GRANT CONTEXT_MATCH
+			if
+			(
+				$stacktop['type'] == 'SYNT_CONTEXT_MATCH' and
+				$stacksecondtop['type'] == 'SYNT_GRANT'
+			)
+			{
+				// throw invalid stack (syntax error) if context match statement duplicates
+				if (isset ($grant['parts'][$stacktop['part']])) 
+					return $stack;
+				// reduce!
+				array_pop ($stack);
+				array_pop ($stack);
+				$grant = $stacksecondtop;
+				$grant['parts'][$stacktop['part']] = $stacktop['condition'];
+				array_push ($stack, $grant);
+				continue;
+			}
+			
 			// DEFINITION ::= DEFINE EXPRESSION
 			if
 			(

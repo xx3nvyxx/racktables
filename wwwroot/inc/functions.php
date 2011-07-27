@@ -1176,13 +1176,23 @@ function getOrphanedTags ()
 	return treeFromList ($taglist, 0, FALSE);
 }
 
+function getAutomaticTags ($chain)
+{
+	$ret = array();
+	foreach ($chain as $taginfo)
+		if (! isset ($taginfo['id']))
+			$ret[] = $taginfo;
+	return $ret;
+}
+
 // Return the list of missing implicit tags.
 function getImplicitTags ($oldtags)
 {
 	global $taglist;
 	$tmp = array();
 	foreach ($oldtags as $taginfo)
-		$tmp = array_merge ($tmp, $taglist[$taginfo['id']]['trace']);
+		if (isset ($taginfo['id']))
+			$tmp = array_merge ($tmp, $taglist[$taginfo['id']]['trace']);
 	// don't call array_unique here, it is in the function we will call now
 	return buildTagChainFromIds ($tmp);
 }
@@ -1196,10 +1206,14 @@ function getExplicitTagsOnly ($chain)
 	$ret = array();
 	foreach (array_keys ($chain) as $keyA) // check each A
 	{
+		if (! isset ($chain[$keyA]['id'])) // check if this is automatic tag
+			continue;
 		$tagidA = $chain[$keyA]['id'];
 		// do not include A in result, if A is seen on the trace of any B!=A
 		foreach (array_keys ($chain) as $keyB)
 		{
+			if (! isset ($chain[$keyB]['id'])) // check if this is automatic tag
+				continue;
 			$tagidB = $chain[$keyB]['id'];
 			if ($tagidA == $tagidB)
 				continue;
@@ -1258,7 +1272,7 @@ function redirectIfNecessary ()
 		! isset ($_REQUEST['tab']) and
 		isset ($_SESSION['RTLT'][$pageno]) and
 		getConfigVar ('SHOW_LAST_TAB') == 'yes' and
-		permitted ($pageno, $_SESSION['RTLT'][$pageno]['tabname']) and
+		permitted (array ('view' => array ('$page_' . $pageno, '$tab_' . $_SESSION['RTLT'][$pageno]['tabname']))) and
 		time() - $_SESSION['RTLT'][$pageno]['time'] <= TAB_REMEMBER_TIMEOUT
 	)
 		redirectUser ($pageno, $_SESSION['RTLT'][$pageno]['tabname']);
@@ -1279,99 +1293,228 @@ function prepareNavigation()
 {
 	global
 		$pageno,
-		$tabno;
-	$pageno = (isset ($_REQUEST['page'])) ? $_REQUEST['page'] : 'index';
-
-	if (isset ($_REQUEST['tab']))
-		$tabno = $_REQUEST['tab'];
+		$tabno,
+		$op;
+	if (!isset ($_REQUEST['page']))
+		$pageno = 'index';
 	else
-		$tabno = 'default';
+	{
+		$pageno = $_REQUEST['page'];
+		$tabno = isset ($_REQUEST['tab']) ? $_REQUEST['tab'] : 'default';
+		if (isset ($_REQUEST['op']))
+			$op = $_REQUEST['op'];
+	}
 }
 
+# Process a (globally available) RackCode permissions parse tree (which
+# stands for a sequence of rules), evaluating each rule against a set of
+# tags (context, stored in $merged_context). This list of tags consists of
+# (globally available) $context structure, grouped by source portions.
+# Some portions of this context could be replaced or extended by the tags
+# passed to this function in $context_changes structure
+function permitted ($context_changes = array())
+{
+	global $context;
+	$subject = $context;
+	$text = ''; // debug variable
+	foreach ($context_changes as $key => $changes)
+	{
+		$additive = FALSE;
+		if ('+' == substr ($key, 0, 1))
+		{
+			$additive = TRUE;
+			$key = substr ($key, 1);
+		}
+		
+		if (! isset ($context[$key]))
+			throw new RackTablesError ("Invalid context part '$key'", RackTablesError::INTERNAL);
+		$tag_chain = array();
+		if (! is_array ($changes))
+			$tag_chain[] = array ('tag' => $changes);
+		else
+		{
+			if (isset ($changes['etags']) and isset ($changes['itags']) and isset ($changes['atags']))
+				$tag_chain = array_merge ($changes['etags'], $changes['itags'], $changes['atags']);
+			else
+				foreach ($changes as $tag_name)
+					$tag_chain[] = array ('tag' => $tag_name);
+		}
+		$text .= (empty ($text) ? '' : ', ') . serializeTags ($tag_chain);
+		$subject[$key] = $additive ? mergeTagChains ($subject[$key], $tag_chain) : $tag_chain;
+	}
+	// inject special flag any_op if there is at least one op in context
+	foreach ($subject['view'] as $taginfo)
+		if (FALSE === strpos ($taginfo['tag'], '$page_') and FALSE === strpos ($taginfo['tag'], '$tab_'))
+		{
+			$subject['view']['$any_op'] = array ('tag' => '$any_op');
+			break;
+		}
+
+	// go though Rackcode rules to decide whether the context snapshot ($subject) matches them
+	$ret = FALSE; // default policy is 'deny'
+	$lineno = 'default'; // debug variable (which rule matched)
+	global $rackCode;
+	$ptable = array();
+	$merged_context = getMergedContext ($subject);
+	foreach ($rackCode as $sentence)
+	{
+		switch ($sentence['type'])
+		{
+			case 'SYNT_DEFINITION':
+				$ptable[$sentence['term']] = $sentence['definition'];
+				break;
+			case 'SYNT_GRANT':
+				$parts_left = array_keys ($subject);
+				foreach ($sentence['parts'] as $lex_part_name => $expression)
+				{
+					switch ($lex_part_name)
+					{
+						case 'LEX_USER_CONTEXT':
+							$partname = 'user';
+							break;
+						case 'LEX_TARGET_CONTEXT':
+							$partname = 'target';
+							break;
+						case 'LEX_VIEW_CONTEXT':
+							$partname = 'view';
+							break;
+						default:
+							throw new RackTablesError ("Invalid context part '$lex_part_name'");
+					}
+					if (! eval_expression ($expression, $subject[$partname], $ptable))
+						break 2; // next sentence
+					$parts_left = array_diff ($parts_left, array ($partname));
+				}
+				if (isset ($sentence['condition']))
+				{
+					if (empty ($parts_left))
+						break; // next sentence, because testing of empty context is meanless
+					$left_context = array();
+					foreach ($parts_left as $partname)
+						$left_context = array_merge ($left_context, $subject[$partname]);
+					if (! eval_expression ($sentence['condition'], $left_context, $ptable))
+						break; // next sentence
+				}
+				switch ($sentence['decision'])
+				{
+					case 'LEX_ALLOW':
+						$ret = TRUE;
+						break;
+					case 'LEX_DENY':
+						$ret = FALSE;
+						break;
+					default:
+						throw new RackTablesError ("Condition match for unknown grant decision '${sentence['decision']}'", RackTablesError::INTERNAL);
+				}
+				$lineno = $sentence['lineno'];
+				break 2; // got result, go to return part
+			case 'SYNT_ADJUSTMENT':
+				break;
+			default:
+				throw new RackTablesError ("Can't process sentence of unknown type '${sentence['type']}'", RackTablesError::INTERNAL);
+		}
+	}
+	//if (FALSE !== strpos ($text, '$op_setPortVLAN')) // FIXME: debug
+	//fb (sprintf ("$text = %d (%s)", $ret, $lineno));
+	return $ret;
+}
+
+# a "throwing" wrapper for above
+function assertPermission ($context_changes = array())
+{
+	if (! permitted ($context_changes))
+		throw new RTPermissionDenied();
+}
+
+// Sets the 'target' and 'view' parts of security context
+// handles security context modifications (SYNT_ADJUSTMENT)
 function fixContext ($target = NULL)
 {
-	global
-		$pageno,
-		$auto_tags,
-		$expl_tags,
-		$impl_tags,
-		$target_given_tags,
-		$user_given_tags,
-		$etype_by_pageno,
-		$page;
+	global $pageno, $tabno, $op, $etype_by_pageno, $page;
 
-	if ($target !== NULL)
-	{
-		$target_given_tags = $target['etags'];
-		// Don't reset autochain, because auth procedures could push stuff there in.
-		// Another important point is to ignore 'user' realm, so we don't infuse effective
-		// context with autotags of the displayed account.
-		if ($target['realm'] != 'user')
-			$auto_tags = array_merge ($auto_tags, $target['atags']);
-	}
-	elseif (array_key_exists ($pageno, $etype_by_pageno))
+	// set target part
+	if ($target === NULL and array_key_exists ($pageno, $etype_by_pageno))
 	{
 		// Each page listed in the map above requires one uint argument.
 		$target_realm = $etype_by_pageno[$pageno];
 		assertUIntArg ($page[$pageno]['bypass']);
 		$target_id = $_REQUEST[$page[$pageno]['bypass']];
 		$target = spotEntity ($target_realm, $target_id);
-		$target_given_tags = $target['etags'];
-		if ($target['realm'] != 'user')
-			$auto_tags = array_merge ($auto_tags, $target['atags']);
 	}
-	// Explicit and implicit chains should be normally empty at this point, so
-	// overwrite the contents anyway.
-	$expl_tags = mergeTagChains ($user_given_tags, $target_given_tags);
-	$impl_tags = getImplicitTags ($expl_tags);
+	if (isset ($target))
+//	if ($target['realm'] != 'user') // FIXME
+		addTagChainToContext ('target', $target);
+
+	// set view part
+	$view_chain = array();
+	if (! empty ($pageno))
+		$view_chain[] = array ('tag' => '$page_' . $pageno);
+	if (! empty ($tabno))
+		$view_chain[] = array ('tag' => '$tab_' . $tabno);
+	if (! empty ($op))
+	{
+		$view_chain[] = array ('tag' => '$op_' . $op);
+		$view_chain[] = array ('tag' => '$any_op');
+	}
+	addTagChainToContext ('view', $view_chain);
+	
+	// do context injections from 'context insert' statements
+	global $rackCode;
+	$ptable = array();
+	$merged_context = getMergedContext();
+	foreach ($rackCode as $sentence)
+	{
+		switch ($sentence['type'])
+		{
+			case 'SYNT_DEFINITION':
+				$ptable[$sentence['term']] = $sentence['definition'];
+				break;
+			case 'SYNT_ADJUSTMENT':
+				if (eval_expression ($sentence['condition'], $merged_context, $ptable))
+					if (processAdjustmentSentence ($sentence['modlist']))
+						$merged_context = getMergedContext();
+				break;
+		}
+	}
 }
 
-# Merge e/i/a-tags of the given cell structures into current context, when
-# these aren't there yet.
-function spreadContext ($extracell)
+// Process a context adjustment request, update security context accordingly,
+// return TRUE on any changes done.
+// The request is a sequence of clear/insert/remove requests exactly as cooked
+// for each SYNT_CTXMODLIST node.
+function processAdjustmentSentence ($modlist)
 {
-	global
-		$auto_tags,
-		$expl_tags,
-		$impl_tags,
-		$target_given_tags,
-		$user_given_tags;
-	foreach ($extracell['atags'] as $taginfo)
-		if (! tagNameOnChain ($taginfo['tag'], $auto_tags))
-			$auto_tags[] = $taginfo;
-	$target_given_tags = mergeTagChains ($target_given_tags, $extracell['etags']);
-	$expl_tags = mergeTagChains ($user_given_tags, $target_given_tags);
-	$impl_tags = getImplicitTags ($expl_tags);
+	global $rackCode;
+	$didChanges = FALSE;
+	foreach ($modlist as $mod)
+		switch ($mod['op'])
+		{
+			case 'insert':
+				$search = getTagByName ($mod['tag']);
+				if ($search === NULL) // skip martians silently
+					break;
+				addTagChainToContext ('user', array ($search)); // FIXME
+				$didChanges = TRUE;
+				break;
+			case 'remove': // FIXME
+			case 'clear':
+			default: // HCF
+				throw new RackTablesError ('invalid structure', RackTablesError::INTERNAL);
+		}
+	return $didChanges;
 }
 
-# return a structure suitable for feeding into restoreContext()
-function getContext()
+function getMergedContext ($subject = NULL)
 {
-	global
-		$auto_tags,
-		$expl_tags,
-		$impl_tags,
-		$target_given_tags;
-	return array
+	global $context;
+	if (! isset ($subject))
+		$subject = $context;
+	return array_merge
 	(
-		'auto_tags' => $auto_tags,
-		'expl_tags' => $expl_tags,
-		'impl_tags' => $impl_tags,
-		'target_given_tags' => $target_given_tags,
+		$subject['user'],
+		$subject['target'],
+		$subject['view']
 	);
-}
-
-function restoreContext ($ctx)
-{
-	global
-		$auto_tags,
-		$expl_tags,
-		$impl_tags,
-		$target_given_tags;
-	$auto_tags = $ctx['auto_tags'];
-	$expl_tags = $ctx['expl_tags'];
-	$impl_tags = $ctx['impl_tags'];
-	$target_given_tags = $ctx['target_given_tags'];
 }
 
 // Take a list of user-supplied tag IDs to build a list of valid taginfo
@@ -1479,6 +1622,28 @@ function getTagByName ($target_name)
 	return NULL;
 }
 
+// $to_add could be either entity cell, or tagchain
+function addTagChainToContext ($context_part, $to_add)
+{
+	global $context;
+	if (! isset ($context[$context_part]))
+		throw new RackTablesError ("Invalid context part '$key'", RackTablesError::INTERNAL);
+	if (is_array ($to_add))
+	{
+		if (isset ($to_add['etags']) and isset ($to_add['itags']) and isset ($to_add['atags']))
+			$chain = array_merge ($to_add['etags'], $to_add['itags'], $to_add['atags']);
+		else
+			$chain = $to_add;
+		foreach ($chain as $taginfo)
+		{
+			$tag_id = (isset ($taginfo['id']) ? $taginfo['id'] : $taginfo['tag']);
+			$context[$context_part][$tag_id] = $taginfo;
+		}
+	}
+	else
+		throw new RackTablesError ("Invalid parameter '$to_add': extecting an array", RackTablesError::INTERNAL);
+}
+
 // Merge two chains, filtering dupes out. Return the resulting superset.
 function mergeTagChains ($chainA, $chainB)
 {
@@ -1486,10 +1651,16 @@ function mergeTagChains ($chainA, $chainB)
 	// Reindex by tag id in any case.
 	$ret = array();
 	foreach ($chainA as $tag)
-		$ret[$tag['id']] = $tag;
+	{
+		$id = isset ($tag['id']) ? $tag['id'] : $tag['tag'];
+		$ret[$id] = $tag;
+	}
 	foreach ($chainB as $tag)
-		if (!isset ($ret[$tag['id']]))
-			$ret[$tag['id']] = $tag;
+	{
+		$id = isset ($tag['id']) ? $tag['id'] : $tag['tag'];
+		if (!isset ($ret[$id]))
+			$ret[$id] = $tag;
+	}
 	return $ret;
 }
 
@@ -2523,15 +2694,15 @@ function judgeCell ($cell, $expression)
 
 function judgeContext ($expression)
 {
-	global $pTable, $expl_tags, $impl_tags, $auto_tags;
+	global $pTable, $context;
 	return eval_expression
 	(
 		$expression,
 		array_merge
 		(
-			$expl_tags,
-			$impl_tags,
-			$auto_tags
+			$context['user'],
+			$context['target'],
+			$context['view']
 		),
 		$pTable,
 		TRUE
@@ -2695,34 +2866,6 @@ function decodeObjectType ($objtype_id, $style = 'r')
 			'o' => readChapter (CHAP_OBJTYPE, 'o')
 		);
 	return $types[$style][$objtype_id];
-}
-
-function isolatedPermission ($p, $t, $cell)
-{
-	// This function is called from both "file" page and a number of other pages,
-	// which have already fixed security context and authorized the user for it.
-	// OTOH, it is necessary here to authorize against the current file, which
-	// means saving the current context and building a new one.
-	global
-		$expl_tags,
-		$impl_tags,
-		$target_given_tags,
-		$auto_tags;
-	// push current context
-	$orig_expl_tags = $expl_tags;
-	$orig_impl_tags = $impl_tags;
-	$orig_target_given_tags = $target_given_tags;
-	$orig_auto_tags = $auto_tags;
-	// retarget
-	fixContext ($cell);
-	// remember decision
-	$ret = permitted ($p, $t);
-	// pop context
-	$expl_tags = $orig_expl_tags;
-	$impl_tags = $orig_impl_tags;
-	$target_given_tags = $orig_target_given_tags;
-	$auto_tags = $orig_auto_tags;
-	return $ret;
 }
 
 function getPortListPrefs()
@@ -4072,10 +4215,10 @@ function authorize8021QChangeRequests ($before, $changes)
 	foreach ($changes as $pn => $change)
 	{
 		foreach (array_diff ($before[$pn]['allowed'], $change['allowed']) as $removed_id)
-			if (!permitted (NULL, NULL, NULL, array (array ('tag' => '$fromvlan_' . $removed_id), array ('tag' => '$vlan_' . $removed_id))))
+			if (!permitted (array ('+view' => array ('$fromvlan_' . $removed_id, '$vlan_' . $removed_id))))
 				continue 2; // next port
 		foreach (array_diff ($change['allowed'], $before[$pn]['allowed']) as $added_id)
-			if (!permitted (NULL, NULL, NULL, array (array ('tag' => '$tovlan_' . $added_id), array ('tag' => '$vlan_' . $added_id))))
+			if (!permitted (array ('+view' => array ('$tovlan_' . $added_id, '$vlan_' . $added_id))))
 				continue 2; // next port
 		$ret[$pn] = $change;
 	}
@@ -4331,19 +4474,19 @@ function searchEntitiesByText ($terms)
 	# user would not be able to browse anyway.
 	if (isset ($summary['object']))
 		foreach ($summary['object'] as $key => $record)
-			if (! isolatedPermission ('object', 'default', spotEntity ('object', $record['id'])))
+			if (! permitted (array ('view' => array ('$page_object', '$tab_default'), 'target' => spotEntity ('object', $record['id']))))
 				unset ($summary['object'][$key]);
 	if (isset ($summary['ipv4network']))
 		foreach ($summary['ipv4network'] as $key => $netinfo)
-			if (! isolatedPermission ('ipv4net', 'default', $netinfo))
+			if (! permitted (array ('view' => array ('$page_ipv4net', '$tab_default'), 'target' => $netinfo)))
 				unset ($summary['ipv4network'][$key]);
 	if (isset ($summary['ipv6network']))
 		foreach ($summary['ipv6network'] as $key => $netinfo)
-			if (! isolatedPermission ('ipv6net', 'default', $netinfo))
+			if (! permitted (array ('view' => array ('$page_ipv6net', '$tab_default'), 'target' => $netinfo)))
 				unset ($summary['ipv6network'][$key]);
 	if (isset ($summary['file']))
 		foreach ($summary['file'] as $key => $fileinfo)
-			if (! isolatedPermission ('file', 'default', $fileinfo))
+			if (! permitted (array ('view' => array ('$page_file', '$tab_default'), 'target' => $fileinfo)))
 				unset ($summary['file'][$key]);
 
 	// clear empty search result realms

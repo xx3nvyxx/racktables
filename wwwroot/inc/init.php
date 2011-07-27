@@ -1,11 +1,10 @@
 <?php
 /*
 *
-* This file performs RackTables initialisation. After you include it
-* from 1st-level page, don't forget to call fixContext(). This is done
-* to enable override of of pageno and tabno variables. pageno and tabno
-* together participate in forming security context by generating
-* related autotags.
+* This file performs RackTables initialisation. Include it
+* from 1st-level page. pageno, tabno and op variables are set here.
+* pageno and tabno together participate in forming security context by
+* generating related autotags.
 *
 */
 
@@ -86,9 +85,12 @@ $taglist = getTagList();
 $tagtree = treeFromList ($taglist);
 sortTree ($tagtree, 'taginfoCmp');
 
-$auto_tags = array();
-// Initial chain for the current user.
-$user_given_tags = array();
+// Initial security context is empty. It is filled by functions authenticate() and fixContext()
+$context = array (
+	'user' => array(),
+	'target' => array(),
+	'view' => array(),
+);
 
 // This also can be modified in local.php.
 $pageheaders = array
@@ -99,12 +101,12 @@ addCSS ('css/pi.css');
 
 if (!isset ($script_mode) or $script_mode !== TRUE)
 {
-	// A successful call to authenticate() always generates autotags and somethimes
-	// even given/implicit tags. It also sets remote_username and remote_displayname.
+	// A successful call to authenticate() fills 'user' part of context.
+	// It also sets remote_username and remote_displayname.
 	authenticate();
 	// Authentication passed.
 	// Note that we don't perform autorization here, so each 1st level page
-	// has to do it in its way, e.g. by calling authorize() after fixContext().
+	// has to do it in its way, e.g. by calling authorize().
 	session_start();
 }
 else
@@ -112,11 +114,14 @@ else
 	// Some functions require remote_username to be set to something to act correctly,
 	// even though they don't use the value itself.
 	$admin_account = spotEntity ('user', 1);
+	addTagChainToContext ('user', $admin_account);
 	$remote_username = $admin_account['user_name'];
 	unset ($admin_account);
 }
 
 alterConfigWithUserPreferences();
+$pageno = '';
+$tabno = '';
 $op = '';
 // local.php may be missing, this case requires no special treatment
 // and must not generate any warnings
@@ -128,10 +133,7 @@ if ($tmp != '' and ! preg_match ("/^\n+$/D", $tmp))
 	echo $tmp;
 unset ($tmp);
 
-// These will be filled in by fixContext()
-$expl_tags = array();
-$impl_tags = array();
-// Initial chain for the current target.
-$target_given_tags = array();
+prepareNavigation();
+fixContext(); // fill 'view' and 'target' parts of context
 
 ?>

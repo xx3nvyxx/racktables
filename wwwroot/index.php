@@ -12,10 +12,8 @@ try {
 		// init.php has to be included after interface.php, otherwise the bits
 		// set by local.php get lost
 		require_once 'inc/init.php';
-		prepareNavigation();
 		// Security context is built on the requested page/tab/bypass data,
 		// do not override.
-		fixContext();
 		redirectIfNecessary();
 		assertPermission();
 		header ('Content-Type: text/html; charset=UTF-8');
@@ -58,7 +56,6 @@ try {
 		require_once 'inc/init.php';
 		$pageno = 'file';
 		$tabno = 'download';
-		fixContext();
 		assertPermission();
 		$file = getFile (getBypassValue());
 		header("Content-Type: {$file['type']}");
@@ -144,13 +141,10 @@ try {
 		try
 		{
 			genericAssertion ('op', 'string');
-			$op = $_REQUEST['op'];
-			prepareNavigation();
 			$location = buildRedirectURL();
 			// FIXME: find a better way to handle this error
 			if ($op == 'addFile' && !isset($_FILES['file']['error']))
 				throw new RackTablesError ('File upload error, check upload_max_filesize in php.ini', RackTablesError::MISCONFIGURED);
-			fixContext();
 			if
 			(
 				!isset ($ophandler[$pageno][$tabno][$op]) or

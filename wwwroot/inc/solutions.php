@@ -17,17 +17,11 @@ function dispatchImageRequest()
 	switch ($_REQUEST['img'])
 	{
 	case 'minirack': // rack security context
-		$pageno = 'rack';
-		$tabno = 'default';
-		fixContext();
-		assertPermission();
+		assertPermission (array ('view' => array ('$page_rack', '$tab_default')));
 		renderRackThumb (getBypassValue());
 		break;
 	case 'preview': // file security context
-		$pageno = 'file';
-		$tabno = 'download';
-		fixContext();
-		assertPermission();
+		assertPermission (array ('view' => array ('$page_file', '$tab_download')));
 		renderFilePreview (getBypassValue());
 		break;
 	default:
