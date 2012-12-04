@@ -3123,7 +3123,9 @@ function postOpHandler ($pageno, $tabno, $op, $callback)
 	switch ($pageno)
 	{
 		case 'tagtree':
-			cacheReset ("cells/%", TRUE);
+			global $SQLSchema;
+			foreach (array_keys ($SQLSchema) as $realm)
+				flushEntityCache ($realm);
 			break;
 	}
 }

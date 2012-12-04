@@ -2041,7 +2041,8 @@ function renderDepot ()
 {
 	global $pageno, $nextorder;
 	$cellfilter = getCellFilter();
-	$objects = filterCellList (listCells ('object'), $cellfilter['expression']);
+	$lc = listCells ('object');
+	$objects = filterCellList ($lc, $cellfilter['expression']);
 
 	echo "<table border=0 class=objectview>\n";
 	echo "<tr><td class=pcleft>";

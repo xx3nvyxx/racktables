@@ -508,7 +508,7 @@ function listCells ($realm, $parent_id = 0)
 function spotEntity ($realm, $id)
 {
 	// return the cached entity, if present
-	if (cacheGet ("cells/$realm/$id", $ret))
+	if (cacheGet ("cells/$realm/$id", $ret, TRUE))
 		return $ret;
 	elseif (cacheGet ("cells/$realm", $cache, TRUE)) // dont fetch the entire realm cache from DB
 		return $cache[$id];
@@ -644,7 +644,7 @@ ORDER BY n2.ip, n2.mask
 		unset ($result);
 	}
 	$ret['atags'] = generateEntityAutoTags ($ret);
-	cacheSet ("cells/$realm/$id", $ret);
+	cacheSet ("cells/$realm/$id", $ret, 0);
 	return $ret;
 }
 
@@ -1038,8 +1038,14 @@ function commitUnlinkEntities ($parent_entity_type, $parent_entity_id, $child_en
 
 function commitUnlinkEntitiesByLinkID ($link_id)
 {
-	usePreparedDeleteBlade ('EntityLink', array ('id' => $link_id));
-	cacheReset ("cells/%", TRUE);
+	$result = usePreparedSelectBlade ('SELECT child_entity_type, child_entity_id FROM EntityLink WHERE id = ?', array ($link_id));
+	$row = $result->fetch (PDO::FETCH_ASSOC);
+	unset ($result);
+	if ($row)
+	{
+		flushEntityCache ($row['child_entity_type'], $row['child_entity_id']);
+		usePreparedDeleteBlade ('EntityLink', array ('id' => $link_id));
+	}
 }
 
 // The following functions return stats about VM-related info.
@@ -5167,7 +5173,7 @@ function getMuninServers()
 // $data is being initialized only if function returns TRUE
 function cacheGet ($key, &$data, $runtime_only = FALSE)
 {
-	global $runtimeCache;
+	global $runtimeCache, $memcache;
 	// L1 cache lookup
 	if (array_key_exists ($key, $runtimeCache))
 	{
@@ -5175,20 +5181,12 @@ function cacheGet ($key, &$data, $runtime_only = FALSE)
 		return TRUE;
 	}
 	// L2 cache lookup
-	if (! $runtime_only)
-	{
-		$result = usePreparedSelectBlade ("SELECT expiring, data FROM Cache WHERE id = ?", array ($key));
-		if ($row = $result->fetch (PDO::FETCH_ASSOC))
+	if (! $runtime_only && isset ($memcache))
+		if (FALSE !== ($result = $memcache->get ($key)))
 		{
-			if (! $row['expiring'] || $row['expiring'] < time())
-			{
-				$data = unserialize ($row['data']);
-				return TRUE;
-			}
-			else
-				usePreparedDeleteBlade ('Cache', array ('id' => $key));
+			$data = $result;
+			return TRUE;
 		}
-	}
 	return FALSE;
 }
 
@@ -5196,33 +5194,27 @@ function cacheGet ($key, &$data, $runtime_only = FALSE)
 // The runtime cache records don't expire on timeout, but only on program exit.
 function cacheSet ($key, $data, $timeout = NULL)
 {
-	global $runtimeCache;
+	global $runtimeCache, $memcache;
 	$runtimeCache[$key] = $data;
 
 	if (! isset ($timeout))
 		$timeout = getConfigVar ('CACHE_TIMEOUT');
-	elseif (! $timeout)
+	if (! $timeout)
 		return;
 
-	usePreparedExecuteBlade ("REPLACE INTO Cache (id, expiring, data) VALUES (?, ?, ?)", array ($key, time() + $timeout, serialize ($data)));
+	if (isset ($memcache))
+		$memcache->set ($key, $data, 0, $timeout);
 }
 
 // $is_pattern - whether to use 'LIKE' or '=' SQL comparison
 // if $is_pattern is TRUE, the runtime cache is cleared completely
-function cacheReset ($key, $is_pattern = FALSE)
+function cacheReset ($key, $runtime_only = FALSE)
 {
-	global $runtimeCache;
-	if ($is_pattern)
-	{
-		$runtimeCache = array();
-		usePreparedExecuteBlade ("DELETE FROM Cache WHERE id LIKE ?", array ($key));
-	}
-	else
-	{
-		if (array_key_exists ($key, $runtimeCache))
-			unset ($runtimeCache[$key]);
-		usePreparedExecuteBlade ("DELETE FROM Cache WHERE id = ?", array ($key));
-	}
+	global $runtimeCache, $memcache;
+	if (array_key_exists ($key, $runtimeCache))
+		unset ($runtimeCache[$key]);
+	if (! $runtime_only && isset ($memcache))
+		$memcache->delete ($key);
 }
 
 // if $id is not set, deletes all cache records of specified $realm
@@ -5230,9 +5222,7 @@ function flushEntityCache ($realm, $id = NULL)
 {
 	cacheReset ("cells/$realm"); // delete list record
 	if (isset ($id))
-		cacheReset ("cells/$realm/$id");
-	else
-		cacheReset ("cells/$realm/%", TRUE);
+		cacheReset ("cells/$realm/$id", TRUE);
 }
 
 // used when we dont know the exact realm of Object's table row

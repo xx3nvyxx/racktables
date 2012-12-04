@@ -37,6 +37,13 @@ if (! fileSearchExists ($path_to_secret_php))
 
 // L1 cache. All cache records being put into DB(L2 cache) are copied here.
 $runtimeCache = array();
+// L2 cache
+$memcache = new Memcache();
+if (! $memcache->connect ('localhost'))
+{
+	//throw new Exception ("cant connect to memcache");
+	unset ($memcache);
+}
 
 connectDB();
 transformRequestData();
