@@ -387,7 +387,7 @@ function buildLVSConfig ($object_id)
 
 function addRStoRSPool ($pool_id, $rsip_bin, $rsport = 0, $inservice = 'no', $rsconfig = '', $comment = '')
 {
-	return usePreparedInsertBlade
+	$ret = usePreparedInsertBlade
 	(
 		'IPv4RS',
 		array
@@ -400,6 +400,8 @@ function addRStoRSPool ($pool_id, $rsip_bin, $rsport = 0, $inservice = 'no', $rs
 			'comment' => !strlen ($comment) ? NULL : $comment,
 		)
 	);
+	flushEntityCache ('ipv4rspool', $pool_id);
+	return $ret;
 }
 
 function addLBtoRSPool ($pool_id = 0, $object_id = 0, $vs_id = 0, $vsconfig = '', $rsconfig = '', $prio = '')
@@ -417,13 +419,16 @@ function addLBtoRSPool ($pool_id = 0, $object_id = 0, $vs_id = 0, $vsconfig = ''
 			'prio' => (!strlen ($prio) ? NULL : $prio),
 		)
 	);
+	flushEntityCache ('ipv4rspool', $pool_id);
+	flushEntityCache ('ipv4vs', $vs_id);
 }
 
 function commitDeleteVS ($id = 0)
 {
 	releaseFiles ('ipv4vs', $id);
-	destroyTagsForEntity ('ipv4vs', $id);
 	usePreparedDeleteBlade ('IPv4VS', array ('id' => $id));
+	destroyTagsForEntity ('ipv4vs', $id);
+	// cache flushed in destroyTagsForEntity
 }
 
 function commitUpdateRS ($rsid, $rsip_bin, $rsport = 0, $inservice = 'yes', $rsconfig = '', $comment = '')
@@ -450,7 +455,7 @@ function commitUpdateVS ($vsid, $vip_bin, $vport = 0, $proto = '', $name = '', $
 		throw new InvalidArgException ('vport', $vport);
 	if (!strlen ($proto))
 		throw new InvalidArgException ('proto', $proto);
-	return usePreparedUpdateBlade
+	$ret = usePreparedUpdateBlade
 	(
 		'IPv4VS',
 		array
@@ -464,6 +469,8 @@ function commitUpdateVS ($vsid, $vip_bin, $vport = 0, $proto = '', $name = '', $
 		),
 		array ('id' => $vsid)
 	);
+	flushEntityCache ('ipv4vs', $vsid);
+	return $ret;
 }
 
 function commitCreateRSPool ($name = '', $vsconfig = '', $rsconfig = '', $tagidlist = array())
@@ -481,14 +488,16 @@ function commitCreateRSPool ($name = '', $vsconfig = '', $rsconfig = '', $tagidl
 	))
 		$new_pool_id = lastInsertID();
 	produceTagsForNewRecord ('ipv4rspool', $tagidlist, $new_pool_id);
+	// cache flushed in produceTagsForNewRecord
 	return $new_pool_id;
 }
 
 function commitDeleteRSPool ($pool_id = 0)
 {
 	releaseFiles ('ipv4rspool', $pool_id);
-	destroyTagsForEntity ('ipv4rspool', $pool_id);
 	usePreparedDeleteBlade ('IPv4RSPool', array ('id' => $pool_id));
+	destroyTagsForEntity ('ipv4rspool', $pool_id);
+	// cache flushed in destroyTagsForEntity
 }
 
 function commitUpdateSLBDefConf ($data)

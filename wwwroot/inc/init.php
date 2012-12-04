@@ -35,6 +35,9 @@ if (! fileSearchExists ($path_to_secret_php))
 		RackTablesError::MISCONFIGURED
 	);
 
+// L1 cache. All cache records being put into DB(L2 cache) are copied here.
+$runtimeCache = array();
+
 connectDB();
 transformRequestData();
 loadConfigDefaults();
@@ -79,13 +82,15 @@ date_default_timezone_set (getConfigVar ('DATETIME_ZONE'));
 if ($rackCode['result'] != 'ACK')
 	throw new RackTablesError ($rackCode['load'], RackTablesError::INTERNAL);
 $rackCode = $rackCode['load'];
+
 // Only call buildPredicateTable() once and save the result, because it will remain
 // constant during one execution for constraints processing.
 $pTable = buildPredicateTable ($rackCode);
+
 // Constraints parse trees aren't cached in the database, so the least to keep
 // things running is to maintain application cache for them.
 $parseCache = array();
-$entityCache = array();
+
 // used by getExplicitTagsOnly()
 $tagRelCache = array();
 
@@ -93,6 +98,7 @@ $taglist = getTagList();
 $tagtree = treeFromList ($taglist);
 
 $auto_tags = array();
+
 // Initial chain for the current user.
 $user_given_tags = array();
 

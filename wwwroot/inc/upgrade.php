@@ -1610,6 +1610,18 @@ CREATE TABLE `MuninGraph` (
 			$query[] = "ALTER TABLE VLANIPv6 DROP KEY `network-domain`";
 			$query[] = "UPDATE Config SET varvalue = '0.20.2' WHERE varname = 'DB_VERSION'";
 			break;
+		case '0.20.3':
+			$query[] = "
+CREATE TABLE `Cache` (
+  `id` char(128) NOT NULL,
+  `expiring` int(11) NOT NULL,
+  `data` longtext NOT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=MyISAM
+";
+			$query[] = "INSERT INTO `Config` (varname, varvalue, vartype, emptyok, is_hidden, is_userdefined, description) VALUES ('CACHE_TIMEOUT','0','int','no','no','no','DB cache timeout (0 to disable caching in DB)')";
+			$query[] = "UPDATE Config SET varvalue = '0.20.3' WHERE varname = 'DB_VERSION'";
+			break;
 		case 'dictionary':
 			$query = reloadDictionary();
 			break;

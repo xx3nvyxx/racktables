@@ -399,12 +399,9 @@ function getNarrowObjectList ($varname = '')
 // enough information for judgeCell() to execute.
 function listCells ($realm, $parent_id = 0)
 {
-	if (!$parent_id)
-	{
-		global $entityCache;
-		if (isset ($entityCache['complete'][$realm]))
-			return $entityCache['complete'][$realm];
-	}
+	if (!$parent_id && cacheGet ("cells/$realm", $ret))
+		return $ret;
+
 	global $SQLSchema;
 	if (!isset ($SQLSchema[$realm]))
 		throw new InvalidArgException ('realm', $realm);
@@ -463,9 +460,8 @@ function listCells ($realm, $parent_id = 0)
 			);
 	}
 	unset($result);
+
 	// Add necessary finish to the list before returning it. Maintain caches.
-	if (!$parent_id)
-		unset ($entityCache['partial'][$realm]);
 	if ($realm == 'object') // cache all attributes of all objects to speed up autotags calculation
 		cacheAllObjectsAttributes();
 	foreach ($ret as $entity_id => &$entity)
@@ -499,35 +495,24 @@ function listCells ($realm, $parent_id = 0)
 	if ($realm == 'ipv4net' or $realm == 'ipv6net')
 		fillIPNetsCorrelation ($ret);
 
-	foreach (array_keys ($ret) as $entity_id)
-	{
-		$entity = &$ret[$entity_id];
+	foreach ($ret as $entity_id => &$entity)
 		$entity['atags'] = generateEntityAutoTags ($entity);
-		if (!$parent_id)
-			$entityCache['complete'][$realm][$entity_id] = $entity;
-		else
-			$entityCache['partial'][$realm][$entity_id] = $entity;
-	}
 
+	if (! $parent_id)
+		cacheSet ("cells/$realm", $ret);
 	return $ret;
 }
 
 // Very much like listCells(), but return only one record requested (or NULL,
 // if it does not exist).
-function spotEntity ($realm, $id, $ignore_cache = FALSE)
+function spotEntity ($realm, $id)
 {
-	global $entityCache;
-	if (! $ignore_cache)
-	{
-		if (isset ($entityCache['complete'][$realm]))
-		// Emphasize the absence of record, if listCells() has already been called.
-			if (isset ($entityCache['complete'][$realm][$id]))
-				return $entityCache['complete'][$realm][$id];
-			else
-				throw new EntityNotFoundException ($realm, $id);
-		elseif (isset ($entityCache['partial'][$realm][$id]))
-			return $entityCache['partial'][$realm][$id];
-	}
+	// return the cached entity, if present
+	if (cacheGet ("cells/$realm/$id", $ret))
+		return $ret;
+	elseif (cacheGet ("cells/$realm", $cache, TRUE)) // dont fetch the entire realm cache from DB
+		return $cache[$id];
+
 	global $SQLSchema;
 	if (!isset ($SQLSchema[$realm]))
 		throw new InvalidArgException ('realm', $realm);
@@ -659,7 +644,7 @@ ORDER BY n2.ip, n2.mask
 		unset ($result);
 	}
 	$ret['atags'] = generateEntityAutoTags ($ret);
-	$entityCache['partial'][$realm][$id] = $ret;
+	cacheSet ("cells/$realm/$id", $ret);
 	return $ret;
 }
 
@@ -863,6 +848,7 @@ function commitAddObject ($new_name, $new_label, $new_type_id, $new_asset_no, $t
 	// Now tags...
 	produceTagsForNewRecord ('object', $taglist, $object_id);
 	recordObjectHistory ($object_id);
+	flushMetaObjectCache ($object_id);
 	return $object_id;
 }
 
@@ -882,6 +868,7 @@ function commitRenameObject ($object_id, $new_name)
 			'id' => $object_id
 		)
 	);
+	flushMetaObjectCache(); // this object could be a container, so flush entire objects cache
 	recordObjectHistory ($object_id);
 }
 
@@ -905,6 +892,7 @@ function commitUpdateObject ($object_id, $new_name, $new_label, $new_has_problem
 			'id' => $object_id
 		)
 	);
+	flushMetaObjectCache(); // this object could be a container, so flush entire objects cache
 	recordObjectHistory ($object_id);
 }
 
@@ -1005,6 +993,8 @@ function commitLinkEntities ($parent_entity_type, $parent_entity_id, $child_enti
 			'child_entity_id' => $child_entity_id,
 		)
 	);
+	flushEntityCache ($parent_entity_type, $parent_entity_id);
+	flushEntityCache ($child_entity_type, $child_entity_id);
 }
 
 function commitUpdateEntityLink
@@ -1023,6 +1013,10 @@ function commitUpdateEntityLink
 			$old_parent_entity_type, $old_parent_entity_id, $old_child_entity_type, $old_child_entity_id
 		)
 	);
+	flushEntityCache ($old_parent_entity_type, $old_parent_entity_id);
+	flushEntityCache ($old_child_entity_type, $old_child_entity_id);
+	flushEntityCache ($new_parent_entity_type, $new_parent_entity_id);
+	flushEntityCache ($new_child_entity_type, $new_child_entity_id);
 }
 
 function commitUnlinkEntities ($parent_entity_type, $parent_entity_id, $child_entity_type, $child_entity_id)
@@ -1038,11 +1032,14 @@ function commitUnlinkEntities ($parent_entity_type, $parent_entity_id, $child_en
 			'child_entity_id' => $child_entity_id
 		)
 	);
+	flushEntityCache ($parent_entity_type, $parent_entity_id);
+	flushEntityCache ($child_entity_type, $child_entity_id);
 }
 
 function commitUnlinkEntitiesByLinkID ($link_id)
 {
 	usePreparedDeleteBlade ('EntityLink', array ('id' => $link_id));
+	cacheReset ("cells/%", TRUE);
 }
 
 // The following functions return stats about VM-related info.
@@ -1214,6 +1211,8 @@ function commitResetObject ($object_id = 0)
 	usePreparedDeleteBlade ('CactiGraph', array ('object_id' => $object_id));
 	# Munin graphs
 	usePreparedDeleteBlade ('MuninGraph', array ('object_id' => $object_id));
+
+	flushMetaObjectCache();
 }
 
 function commitDeleteRack($rack_id)
@@ -1223,6 +1222,7 @@ function commitDeleteRack($rack_id)
 	usePreparedDeleteBlade ('RackSpace', array ('rack_id' => $rack_id));
 	usePreparedDeleteBlade ('RackHistory', array ('id' => $rack_id));
 	usePreparedDeleteBlade ('Rack', array ('id' => $rack_id));
+	// cache flushing is performed in destroyTagsForEntity
 }
 
 function commitUpdateRack ($rack_id, $new_row_id, $new_name, $new_height, $new_has_problems, $new_asset_no, $new_comment)
@@ -1265,6 +1265,7 @@ function commitUpdateRack ($rack_id, $new_row_id, $new_name, $new_height, $new_h
 
 	// Update the rack
 	commitUpdateObject ($rack_id, $new_name, NULL, $new_has_problems, $new_asset_no, $new_comment);
+	flushEntityCache ('rack', $rack_id);
 }
 
 // Used when sort order is manually changed, and when a rack is moved or deleted
@@ -1514,6 +1515,7 @@ function commitAddPort ($object_id = 0, $port_name, $port_type_id, $port_label, 
 			'l2address' => ($db_l2address === '') ? NULL : $db_l2address,
 		)
 	);
+	flushEntityCache ('object', $object_id);
 	$dbxlink->exec ('UNLOCK TABLES');
 	return lastInsertID();
 }
@@ -3005,7 +3007,9 @@ function commitCreateUserAccount ($username, $realname, $password)
 			'user_password_hash' => $password,
 		)
 	);
-	return lastInsertID();
+	$user_id = lastInsertID();
+	flushEntityCache ('user', $user_id);
+	return $user_id;
 }
 
 function commitUpdateUserAccount ($id, $new_username, $new_realname, $new_password)
@@ -3021,6 +3025,7 @@ function commitUpdateUserAccount ($id, $new_username, $new_realname, $new_passwo
 		),
 		array ('user_id' => $id)
 	);
+	flushEntityCache ('user', $id);
 }
 
 // This function returns an array of all port type pairs from PortCompat table.
@@ -3455,6 +3460,7 @@ function commitUpdateAttrValue ($object_id, $attr_id, $value = '')
 			'attr_id' => $attr_id,
 		)
 	);
+	flushMetaObjectCache ($object_id);
 }
 
 function convertPDOException ($e)
@@ -3692,6 +3698,7 @@ function generateEntityAutoTags ($cell)
 		case 'ipv4net':
 			// v4-only rules
 			$ret[] = array ('tag' => '$ip4net-' . str_replace ('.', '-', $cell['ip']) . '-' . $cell['mask']);
+			// case fall through
 		case 'ipv6net':
 			// common (v4 & v6) rules
 			$ver = $cell['realm'] == 'ipv4net' ? 4 : 6;
@@ -3810,6 +3817,7 @@ function getTagList ()
 function destroyTagsForEntity ($entity_realm, $entity_id)
 {
 	usePreparedDeleteBlade ('TagStorage', array ('entity_realm' => $entity_realm, 'entity_id' => $entity_id));
+	flushEntityCache ($entity_realm, $entity_id);
 }
 
 // Drop only one record. This operation doesn't involve retossing other tags, unlike when adding.
@@ -3818,6 +3826,7 @@ function destroyTagsForEntity ($entity_realm, $entity_id)
 function deleteTagForEntity ($entity_realm, $entity_id, $tag_id)
 {
 	usePreparedDeleteBlade ('TagStorage', array ('entity_realm' => $entity_realm, 'entity_id' => $entity_id, 'tag_id' => $tag_id));
+	flushEntityCache ($entity_realm, $entity_id);
 }
 
 // Push a record into TagStorage unconditionally.
@@ -3840,6 +3849,7 @@ function addTagForEntity ($realm, $entity_id, $tag_id)
 			$remote_username,
 		)
 	);
+	flushEntityCache ($realm, $entity_id);
 }
 
 // Add records into TagStorage, if this makes sense (IOW, they don't appear
@@ -3874,6 +3884,7 @@ function rebuildTagChainForEntity ($realm, $entity_id, $extrachain = array(), $r
 		addTagForEntity ($realm, $entity_id, $tag_id);
 		$result = TRUE;
 	}
+	flushEntityCache ($realm, $entity_id);
 	return $result;
 }
 
@@ -3913,6 +3924,7 @@ function createIPv4Prefix ($range = '', $name = '', $is_connected = FALSE, $tagl
 		)
 	);
 	$network_id = lastInsertID();
+	flushEntityCache ('ipv4net');
 
 	if ($is_connected and $mask < 31)
 	{
@@ -3952,6 +3964,7 @@ function createIPv6Prefix ($range = '', $name = '', $is_connected = FALSE, $tagl
 		)
 	);
 	$network_id = lastInsertID();
+	flushEntityCache ('ipv6net');
 	# RFC3513 2.6.1 - Subnet-Router anycast
 	if ($is_connected)
 		updateV6Address ($net['ip_bin'], 'Subnet-Router anycast', 'yes');
@@ -3973,6 +3986,7 @@ function destroyIPv4Prefix ($id)
 	releaseFiles ('ipv4net', $id);
 	usePreparedDeleteBlade ('IPv4Network', array ('id' => $id));
 	destroyTagsForEntity ('ipv4net', $id);
+	flushEntityCache ('ipv4net');
 }
 
 // FIXME: This function doesn't wipe relevant records from IPv6Address table.
@@ -3981,6 +3995,7 @@ function destroyIPv6Prefix ($id)
 	releaseFiles ('ipv6net', $id);
 	usePreparedDeleteBlade ('IPv6Network', array ('id' => $id));
 	destroyTagsForEntity ('ipv6net', $id);
+	flushEntityCache ('ipv6net');
 }
 
 function loadScript ($name)
@@ -4337,6 +4352,7 @@ function commitAddFile ($name, $type, $contents, $comment)
 		$query->execute();
 		$file_id = lastInsertID();
 		usePreparedExecuteBlade ('UPDATE File SET size = LENGTH(contents) WHERE id = ?', array ($file_id));
+		flushEntityCache ('file', $file_id);
 		return $file_id;
 	}
 	catch (PDOException $e)
@@ -4371,6 +4387,7 @@ function commitDeleteFile ($file_id)
 {
 	destroyTagsForEntity ('file', $file_id);
 	usePreparedDeleteBlade ('File', array ('id' => $file_id));
+	flushEntityCache ('file', $file_id);
 }
 
 function getChapterList ()
@@ -4766,6 +4783,7 @@ function commitSupplementVLANIPv4 ($vlan_ck, $ipv4net_id)
 			'ipv4net_id' => $ipv4net_id,
 		)
 	);
+	flushEntityCache ('ipv4net', $ipv4net_id);
 }
 
 function commitSupplementVLANIPv6 ($vlan_ck, $ipv6net_id)
@@ -4781,6 +4799,7 @@ function commitSupplementVLANIPv6 ($vlan_ck, $ipv6net_id)
 			'ipv6net_id' => $ipv6net_id,
 		)
 	);
+	flushEntityCache ('ipv6net', $ipv6net_id);
 }
 
 function commitReduceVLANIPv4 ($vlan_ck, $ipv4net_id)
@@ -4796,6 +4815,7 @@ function commitReduceVLANIPv4 ($vlan_ck, $ipv4net_id)
 			'ipv4net_id' => $ipv4net_id,
 		)
 	);
+	flushEntityCache ('ipv4net', $ipv4net_id);
 }
 
 function commitReduceVLANIPv6 ($vlan_ck, $ipv6net_id)
@@ -4811,6 +4831,7 @@ function commitReduceVLANIPv6 ($vlan_ck, $ipv6net_id)
 			'ipv6net_id' => $ipv6net_id,
 		)
 	);
+	flushEntityCache ('ipv6net', $ipv6net_id);
 }
 
 // Return a list of switches, which have specific VLAN configured on
@@ -4945,6 +4966,7 @@ function commitUpdateVSTRules ($vst_id, $mutex_rev, $rules)
 	foreach ($rules as $rule)
 		usePreparedInsertBlade ('VLANSTRule', array_merge (array ('vst_id' => $vst_id), $rule));
 	usePreparedExecuteBlade ('UPDATE VLANSwitchTemplate SET mutex_rev=mutex_rev+1, saved_by=? WHERE id=?', array ($remote_username, $vst_id));
+	flushEntityCache ('vst', $vst_id);
 	$dbxlink->commit();
 }
 
@@ -5140,6 +5162,84 @@ function getMuninServers()
 		'FROM MuninServer AS MS LEFT JOIN MuninGraph AS MG ON MS.id = MG.server_id GROUP BY id'
 	);
 	return reindexById ($result->fetchAll (PDO::FETCH_ASSOC));
+}
+
+// $data is being initialized only if function returns TRUE
+function cacheGet ($key, &$data, $runtime_only = FALSE)
+{
+	global $runtimeCache;
+	// L1 cache lookup
+	if (array_key_exists ($key, $runtimeCache))
+	{
+		$data = $runtimeCache[$key];
+		return TRUE;
+	}
+	// L2 cache lookup
+	if (! $runtime_only)
+	{
+		$result = usePreparedSelectBlade ("SELECT expiring, data FROM Cache WHERE id = ?", array ($key));
+		if ($row = $result->fetch (PDO::FETCH_ASSOC))
+		{
+			if (! $row['expiring'] || $row['expiring'] < time())
+			{
+				$data = unserialize ($row['data']);
+				return TRUE;
+			}
+			else
+				usePreparedDeleteBlade ('Cache', array ('id' => $key));
+		}
+	}
+	return FALSE;
+}
+
+// $timeout in seconds. If zero, only runtime caching is performed
+// The runtime cache records don't expire on timeout, but only on program exit.
+function cacheSet ($key, $data, $timeout = NULL)
+{
+	global $runtimeCache;
+	$runtimeCache[$key] = $data;
+
+	if (! isset ($timeout))
+		$timeout = getConfigVar ('CACHE_TIMEOUT');
+	elseif (! $timeout)
+		return;
+
+	usePreparedExecuteBlade ("REPLACE INTO Cache (id, expiring, data) VALUES (?, ?, ?)", array ($key, time() + $timeout, serialize ($data)));
+}
+
+// $is_pattern - whether to use 'LIKE' or '=' SQL comparison
+// if $is_pattern is TRUE, the runtime cache is cleared completely
+function cacheReset ($key, $is_pattern = FALSE)
+{
+	global $runtimeCache;
+	if ($is_pattern)
+	{
+		$runtimeCache = array();
+		usePreparedExecuteBlade ("DELETE FROM Cache WHERE id LIKE ?", array ($key));
+	}
+	else
+	{
+		if (array_key_exists ($key, $runtimeCache))
+			unset ($runtimeCache[$key]);
+		usePreparedExecuteBlade ("DELETE FROM Cache WHERE id = ?", array ($key));
+	}
+}
+
+// if $id is not set, deletes all cache records of specified $realm
+function flushEntityCache ($realm, $id = NULL)
+{
+	cacheReset ("cells/$realm"); // delete list record
+	if (isset ($id))
+		cacheReset ("cells/$realm/$id");
+	else
+		cacheReset ("cells/$realm/%", TRUE);
+}
+
+// used when we dont know the exact realm of Object's table row
+function flushMetaObjectCache ($id = NULL)
+{
+	foreach (array ('object', 'rack', 'row', 'location') as $quazi_realm)
+		flushEntityCache ($quazi_realm, $id);
 }
 
 ?>

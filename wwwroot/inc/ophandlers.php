@@ -1182,6 +1182,7 @@ function updateObject ()
 	// Invalidate thumb cache of all racks objects could occupy.
 	foreach (getResidentRacksData ($object_id, FALSE) as $rack_id)
 		usePreparedDeleteBlade ('RackThumbnail', array ('rack_id' => $rack_id));
+	flushEntityCache ('object'); // this object could be a container, so flush entire objects cache
 	$dbxlink->commit();
 	return showFuncMessage (__FUNCTION__, 'OK');
 }
@@ -1591,6 +1592,7 @@ function addVService ()
 	if (isset ($_REQUEST['taglist']))
 		produceTagsForNewRecord ('ipv4vs', $_REQUEST['taglist'], $vs_id);
 	$vsinfo = spotEntity ('ipv4vs', $vs_id);
+	flushEntityCache ('ipv4vs');
 	return showSuccess ('Virtual service <a href="' . makeHref (array ('page' => 'ipv4vs', 'tab' => 'default', 'vs_id' => $vs_id)) . '">' . $vsinfo['dname'] . '</a> created successfully');
 }
 
@@ -2051,6 +2053,7 @@ function updateRack ()
 		$_REQUEST['comment']
 	);
 	updateObjectAttributes ($rack_id);
+	flushEntityCache ('rack', $rack_id);
 	return showFuncMessage (__FUNCTION__, 'OK', array ($_REQUEST['name']));
 }
 
@@ -2341,6 +2344,8 @@ function add8021QOrder ()
 		'VALUES (?, ?, ?, NOW(), "yes")',
 		array ($sic['vdom_id'], $sic['object_id'], $sic['vst_id'])
 	);
+	flushEntityCache ('object', $sic['object_id']);
+	flushEntityCache ('vst', $sic['vst_id']);
 	return showFuncMessage (__FUNCTION__, 'OK');
 }
 
@@ -2358,6 +2363,8 @@ function del8021QOrder ()
 		spreadContext (spotEntity ('vst', $sic['vst_id']));
 	assertPermission();
 	usePreparedDeleteBlade ('VLANSwitch', array ('object_id' => $sic['object_id']));
+	flushEntityCache ('object', $sic['object_id']);
+	flushEntityCache ('vst', $sic['vst_id']);
 	$focus_hints = array
 	(
 		'prev_objid' => $_REQUEST['object_id'],
@@ -3076,6 +3083,49 @@ function tableHandler()
 		throw new InvalidArgException ('opspec/action', $opspec['action']);
 	}
 	showOneLiner ($retcode);
+}
+
+// Being called just before any ophandler via callHook.
+// Useful for maintaining caches.
+function postOpHandler ($pageno, $tabno, $op, $callback)
+{
+	// flush cache on certain operations
+	switch ("$pageno-$tabno")
+	{
+		case 'object-edit':
+			flushEntityCache ('object');
+			break;
+		case 'object-ports':
+			if ($op == 'delPort' || $op == 'deleteAll')
+				flushEntityCache ('object', getBypassValue());
+			break;
+		case 'object-editrspvs':
+		case 'ipv4vs-editlblist';
+		case 'ipv4rspool-editlblist';
+			flushEntityCache ('ipv4vs');
+			flushEntityCache ('ipv4rspool');
+			break;
+		case 'ipv4net-properties':
+			flushEntityCache ('ipv4net', getBypassValue());
+			break;
+		case 'ipv6net-properties':
+			flushEntityCache ('ipv6net', getBypassValue());
+			break;
+		case 'file-edit':
+			flushEntityCache ('file', getBypassValue());
+			break;
+		case 'ipv4rspool-edit':
+		case 'ipv4rspool-editrslist':
+			flushEntityCache ('ipv4rspool', getBypassValue());
+			break;
+	}
+
+	switch ($pageno)
+	{
+		case 'tagtree':
+			cacheReset ("cells/%", TRUE);
+			break;
+	}
 }
 
 ?>

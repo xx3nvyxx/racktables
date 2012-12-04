@@ -222,8 +222,10 @@ try {
 			# arguments. And it would be even better to pass returned value to ophandler,
 			# so it is not necessary to remember the name of bypass in it.
 			getBypassValue();
+			callHook ('preOpHandler', $pageno, $tabno, $op, $ophandler[$pageno][$tabno][$op]);
 			if (strlen ($redirect_to = call_user_func ($ophandler[$pageno][$tabno][$op])))
 				$location = $redirect_to;
+			callHook ('postOpHandler', $pageno, $tabno, $op, $ophandler[$pageno][$tabno][$op]);
 		}
 		// known "soft" failures require a short error message
 		catch (InvalidRequestArgException $e)
